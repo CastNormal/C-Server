@@ -68,6 +68,7 @@ int main(int argc, char *argv[]) {
         //close(client_fd); we close it on the handle_client func
     }
 
+    close(sockfd);
     return 0;
 }
 
