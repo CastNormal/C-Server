@@ -1,0 +1,13 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/sebastianarrietageagea/Documents/GitHub/Database/main'
+relocations:
+  - { offsetInCU: 0x26, offset: 0x26, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100003630, symSize: 0x148 }
+  - { offsetInCU: 0x33, offset: 0x33, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100003630, symSize: 0x148 }
+  - { offsetInCU: 0x58, offset: 0x58, size: 0x8, addend: 0x0, symName: _main.serv_addr, symObjAddr: 0x2318, symBinAddr: 0x100008000, symSize: 0x0 }
+  - { offsetInCU: 0x1B2, offset: 0x1B2, size: 0x8, addend: 0x0, symName: _handle_client, symObjAddr: 0x148, symBinAddr: 0x100003778, symSize: 0x160 }
+  - { offsetInCU: 0x220, offset: 0x220, size: 0x8, addend: 0x0, symName: _create_res_buffer, symObjAddr: 0x2A8, symBinAddr: 0x1000038D8, symSize: 0x140 }
+  - { offsetInCU: 0x280, offset: 0x280, size: 0x8, addend: 0x0, symName: _build_header, symObjAddr: 0x3E8, symBinAddr: 0x100003A18, symSize: 0x1D8 }
+  - { offsetInCU: 0x2D2, offset: 0x2D2, size: 0x8, addend: 0x0, symName: _get_file_contents, symObjAddr: 0x5C0, symBinAddr: 0x100003BF0, symSize: 0xBC }
+  - { offsetInCU: 0x324, offset: 0x324, size: 0x8, addend: 0x0, symName: _free_res_buffer, symObjAddr: 0x67C, symBinAddr: 0x100003CAC, symSize: 0x30 }
+...
