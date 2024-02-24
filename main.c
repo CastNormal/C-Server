@@ -16,6 +16,7 @@
 #define BUFFER_SIZE 4096
 #define FILE_NAME_SIZE 256
 #define CONTENT_TYPE_SIZE 64
+#define THREAD_COUNT 4
 
 typedef struct {
     char *buffer;
@@ -24,7 +25,41 @@ typedef struct {
     uint buffer_size;
 } RESPONSE_BUFFER;
 
+struct Task {
+    int *client_fd;
+    struct Task *next;
+};
+typedef struct Task Task;
+
+Task *head = NULL;
+Task *tail = NULL;
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condition_var = PTHREAD_COND_INITIALIZER;
+
+void enqueue(int *client_fd) {
+    Task *t = malloc(sizeof(Task));
+    t->client_fd = client_fd;
+    t->next = NULL;
+    if (tail == NULL) head = t;
+    else tail->next = t;
+
+    tail = t;
+}
+
+int *dequeue() {
+    if (head == NULL) return NULL;
+    int *t = head->client_fd;
+    Task *temp = head;
+    head = head->next;
+    if (head == NULL) tail = NULL;
+    free(temp);
+    return t;
+}
+
+pthread_t thread_pool[THREAD_COUNT];
+
 void *handle_client(void *arg);
+void *thread_handler(void *arg);
 void free_res_buffer(RESPONSE_BUFFER *res);
 int create_res_buffer(RESPONSE_BUFFER *res, char *recv_buffer);
 int get_file_contents(RESPONSE_BUFFER *res, char *file_name);
@@ -50,6 +85,10 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        pthread_create(&thread_pool[i], NULL, thread_handler, NULL);
+    }
+
     while(1) {
         
         struct sockaddr_in client_addr;
@@ -61,15 +100,26 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        pthread_t thread;
-        pthread_create(&thread, NULL, handle_client, (void*)client_fd);
-        pthread_detach(thread);
-
-        //close(client_fd); we close it on the handle_client func
+        pthread_mutex_lock(&lock);
+        enqueue(client_fd);
+        pthread_cond_signal(&condition_var);
+        pthread_mutex_unlock(&lock);
     }
 
     close(sockfd);
     return 0;
+}
+
+void *thread_handler(void *arg) {
+    while (1) {
+        pthread_mutex_lock(&lock);
+        int *client_fd = dequeue();
+        if (client_fd == NULL) pthread_cond_wait(&condition_var, &lock);
+        pthread_mutex_unlock(&lock);
+        if (client_fd != NULL) {
+            handle_client(client_fd);
+        }
+    }
 }
 
 void *handle_client(void *arg) {
@@ -78,25 +128,25 @@ void *handle_client(void *arg) {
 
     char *recv_buffer = malloc(BUFFER_SIZE);
     int valread = read(client_fd, recv_buffer, BUFFER_SIZE);
-    printf("recv_buffer: %s\n", recv_buffer);
+    //printf("recv_buffer: %s\n", recv_buffer);
 
     RESPONSE_BUFFER *res = malloc(sizeof(RESPONSE_BUFFER));
     if (create_res_buffer(res, recv_buffer) == 1) {
         printf("Failed to create response buffer");
-        return 0;
+        return NULL;
     }
-    printf("send_buffer: %s\n", res->buffer);
+    //printf("send_buffer: %s\n", res->buffer);
     int valwrite = write(client_fd, res->buffer, strlen(res->buffer));
     if (valwrite < 0) {
         perror("webserver (write)");
-        return 0;
+        return NULL;
     };
 
     free(recv_buffer);
     free(res->buffer);
     free(res);
     close(client_fd);
-    return 0;
+    return NULL;
 }
 
 int create_res_buffer(RESPONSE_BUFFER *res, char *recv_buffer) {
