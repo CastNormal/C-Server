@@ -106,7 +106,6 @@ int build_header(RESPONSE_BUFFER *res, char *file_name);
 int sockfd;
 
 void handle_interrupt(int signum) {
-    printf("Socket closed");
     free_response_buffers();
     free_recieve_buffers();
     close(sockfd);
@@ -126,6 +125,12 @@ int main(int argc, char *argv[]) {
 
     if (bind(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("failed to bind server");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(int))) {
+        perror("setsockopt");
         exit(EXIT_FAILURE);
     }
 
@@ -161,7 +166,7 @@ int main(int argc, char *argv[]) {
     close(sockfd);
     free_response_buffers();
     free_recieve_buffers();
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 void *thread_handler(void *arg) {
