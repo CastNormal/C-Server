@@ -25,6 +25,47 @@ typedef struct {
     uint buffer_size;
 } RESPONSE_BUFFER;
 
+typedef struct {
+    char *buffer;
+    uint buffer_size;
+} RECIEVE_BUFFER;
+
+typedef struct {
+    pthread_t thread;
+    RECIEVE_BUFFER recv;
+    RESPONSE_BUFFER resp;
+    int *client_fd;
+} THREAD;
+
+THREAD thread_pool[THREAD_COUNT];
+
+void init_recieve_buffers() {
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        thread_pool[i].recv.buffer_size = BUFFER_SIZE;
+        thread_pool[i].recv.buffer = malloc(sizeof(RECIEVE_BUFFER));
+        memset(thread_pool[i].recv.buffer, 0, thread_pool[i].recv.buffer_size);
+    }
+}
+
+void free_recieve_buffers() {
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        free(thread_pool[i].recv.buffer);
+    }
+}
+
+void init_response_buffers() {
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        thread_pool[i].resp.buffer = malloc(sizeof(RESPONSE_BUFFER));
+        memset(thread_pool[i].resp.buffer, 0, BUFFER_SIZE);
+    }
+}
+
+void free_response_buffers() {
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        free(thread_pool[i].resp.buffer);
+    }
+}
+
 struct Task {
     int *client_fd;
     struct Task *next;
@@ -56,18 +97,24 @@ int *dequeue() {
     return t;
 }
 
-pthread_t thread_pool[THREAD_COUNT];
-
 void *handle_client(void *arg);
 void *thread_handler(void *arg);
-void free_res_buffer(RESPONSE_BUFFER *res);
-int create_res_buffer(RESPONSE_BUFFER *res, char *recv_buffer);
+int create_res_buffer(RESPONSE_BUFFER *resp, RECIEVE_BUFFER *recv);
 int get_file_contents(RESPONSE_BUFFER *res, char *file_name);
 int build_header(RESPONSE_BUFFER *res, char *file_name);
 
+int sockfd;
+
+void handle_interrupt(int signum) {
+    printf("Socket closed");
+    free_response_buffers();
+    free_recieve_buffers();
+    close(sockfd);
+    exit(EXIT_SUCCESS);
+}
+
 int main(int argc, char *argv[]) {
-    int sockfd;
-    static struct sockaddr_in serv_addr;
+    struct sockaddr_in serv_addr;
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
     serv_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -78,7 +125,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (bind(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("failed to bind server to ");
+        perror("failed to bind server");
+        exit(EXIT_FAILURE);
     }
 
     if (listen(sockfd, 10) < 0) {
@@ -86,11 +134,15 @@ int main(int argc, char *argv[]) {
     }
 
     for (int i = 0; i < THREAD_COUNT; i++) {
-        pthread_create(&thread_pool[i], NULL, thread_handler, NULL);
+        pthread_create(&thread_pool[i].thread, NULL, thread_handler, &thread_pool[i]);
     }
 
+    init_recieve_buffers();
+    init_response_buffers();
+
+    signal(SIGINT, handle_interrupt);
+
     while(1) {
-        
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         int *client_fd = malloc(sizeof(int));
@@ -107,79 +159,76 @@ int main(int argc, char *argv[]) {
     }
 
     close(sockfd);
+    free_response_buffers();
+    free_recieve_buffers();
     return 0;
 }
 
 void *thread_handler(void *arg) {
+    THREAD *thread = (THREAD*)arg;
     while (1) {
         pthread_mutex_lock(&lock);
         int *client_fd = dequeue();
         if (client_fd == NULL) pthread_cond_wait(&condition_var, &lock);
         pthread_mutex_unlock(&lock);
         if (client_fd != NULL) {
-            handle_client(client_fd);
+            thread->client_fd = client_fd;
+            handle_client(thread);
         }
     }
 }
 
 void *handle_client(void *arg) {
-    int client_fd = *((int*)arg);
-    free(arg);
+    THREAD *thread = (THREAD*)arg;
+    int client_fd = *thread->client_fd;
+    free(thread->client_fd);
 
-    char *recv_buffer = malloc(BUFFER_SIZE);
-    int valread = read(client_fd, recv_buffer, BUFFER_SIZE);
-    //printf("recv_buffer: %s\n", recv_buffer);
+    int valread = read(client_fd, thread->recv.buffer, thread->recv.buffer_size);
 
-    RESPONSE_BUFFER *res = malloc(sizeof(RESPONSE_BUFFER));
-    if (create_res_buffer(res, recv_buffer) == 1) {
+    if (create_res_buffer(&thread->resp, &thread->recv) == 1) {
         printf("Failed to create response buffer");
         return NULL;
     }
-    //printf("send_buffer: %s\n", res->buffer);
-    int valwrite = write(client_fd, res->buffer, strlen(res->buffer));
+
+    int valwrite = write(client_fd, thread->resp.buffer, thread->resp.buffer_size);
     if (valwrite < 0) {
-        perror("webserver (write)");
+        perror("Failed to send response buffer");
         return NULL;
     };
 
-    free(recv_buffer);
-    free(res->buffer);
-    free(res);
     close(client_fd);
     return NULL;
 }
 
-int create_res_buffer(RESPONSE_BUFFER *res, char *recv_buffer) {
+int create_res_buffer(RESPONSE_BUFFER *resp, RECIEVE_BUFFER *recv) {
     char *file_name = malloc(FILE_NAME_SIZE);
 
-    if (strncmp(recv_buffer, "GET", 3) != 0) return 1;
+    if (strncmp(recv->buffer, "GET", 3) != 0) return 1;
 
-    if (strncmp(recv_buffer, "GET / HTTP/1.1", 14) == 0) {
+    if (strncmp(recv->buffer, "GET / HTTP/1.1", 14) == 0) {
         strcpy(file_name, "index.html");
     } else {
-        strtok(recv_buffer,  "/");
+        strtok(recv->buffer,  "/");
         char *temp = strtok(NULL, " \n\r");
         strcpy(file_name, temp);
+
+        if (strncmp(file_name, "assets", 6) == 0) return 1; //if it's not in assets, the client is trying to access unrelated files
     }
 
-    res->header_offset = 0;
-    res->buffer = malloc(BUFFER_SIZE);
-    res->buffer_size = BUFFER_SIZE;
-    memset(res->buffer, 0, res->buffer_size); //important to init memory to remove any chances of it being used (took me way to long to debug)
+    resp->header_offset = 0;
+    resp->buffer = malloc(BUFFER_SIZE);
+    resp->buffer_size = BUFFER_SIZE;
+    memset(resp->buffer, 0, BUFFER_SIZE); //important to init memory to remove any chances of it being used (took me way to long to debug)
 
-    build_header(res, file_name);
-    get_file_contents(res, file_name);
+    build_header(resp, file_name);
+    get_file_contents(resp, file_name);
+    resp->buffer_size = strlen(resp->buffer);
 
     free(file_name);
     return 0;
 }
 
-void free_res_buffer(RESPONSE_BUFFER *res) {
-    free(res->buffer);
-    free(res);
-}
-
-int build_header(RESPONSE_BUFFER *res, char *file_name) {
+int build_header(RESPONSE_BUFFER *resp, char *file_name) {
     char *extension = strchr(file_name, '.');
     if (extension == NULL) return 1;
 
@@ -195,18 +244,18 @@ int build_header(RESPONSE_BUFFER *res, char *file_name) {
         return 1;
     }
 
-    snprintf(res->buffer+res->header_offset, res->buffer_size,
+    snprintf(resp->buffer+resp->header_offset, resp->buffer_size,
             "HTTP/1.1 200 OK\r\n"
              "Content-Type: %s; charset=utf-8\r\n"
              "X-Content-Type-Options: nosniff\r\n"
              "X-Frame-Options: Deny\r\n"
              "\r\n", content_type);
-    printf("\nhttp header:\n%s\n", res->buffer);
-    res->body_offset = strlen(res->buffer);
+    //printf("\nhttp header:\n%s\n", res->buffer);
+    resp->body_offset = strlen(resp->buffer);
     return 0;
 }
 
-int get_file_contents(RESPONSE_BUFFER *res, char *file_name) {
+int get_file_contents(RESPONSE_BUFFER *resp, char *file_name) {
     FILE *f = fopen(file_name, "r");
     if (f == NULL) return 1;
     
@@ -214,7 +263,7 @@ int get_file_contents(RESPONSE_BUFFER *res, char *file_name) {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    fread(res->buffer+res->body_offset, fsize, 1, f);
+    fread(resp->buffer+resp->body_offset, fsize, 1, f);
 
     fclose(f);
     return 0;
